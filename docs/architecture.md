@@ -1,0 +1,225 @@
+# Архитектура Losk Space
+
+## Обзор проекта
+
+Losk Space — аналитическая платформа по новостройкам Москвы.
+Помогает покупателям выбирать квартиры через персональный коэффициент комфорта
+и расчёт финансовых стратегий погашения.
+
+---
+
+## Стек технологий
+
+| Слой | Технология | Обоснование |
+|---|---|---|
+| Backend API | FastAPI + Pydantic | Async, автодокументация, востребован на рынке |
+| ORM | SQLAlchemy + Alembic | Гибкость, зрелость, поддержка PostGIS |
+| База данных | PostgreSQL + PostGIS | Геозапросы (метро, парки, расстояния) |
+| Очереди | Celery + Redis | Фоновый парсинг XML, обновление цен |
+| Frontend | Next.js (React, TypeScript) | SEO, удобная маршрутизация |
+| Инфраструктура | Docker Compose | Единая среда для dev и prod |
+| CI/CD | GitHub Actions | Автотесты, линтер, деплой |
+| ML (этап 4) | scikit-learn / CatBoost | Стратегии погашения, анализ рисков |
+
+---
+
+## Схема сервисов
+
+```
+XML-фиды застройщиков
+        │
+        ▼
+  Celery Worker  ──── Redis (очередь задач)
+        │
+        ▼
+  FastAPI (Backend)
+        │
+        ├── PostgreSQL + PostGIS (основные данные)
+        │
+        ├── ML Service (этап 4, внутренний API)
+        │
+        └── Внешние API (ЦБ РФ, геокодер)
+                │
+                ▼
+        Next.js Frontend
+                │
+                ▼
+          Пользователь
+```
+
+---
+
+## Структура репозитория
+
+```
+losk-space/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml              # lint + tests на каждый PR
+│       └── deploy.yml          # деплой при мерже в main
+│
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   └── v1/
+│   │   │       ├── properties.py
+│   │   │       ├── calculator.py
+│   │   │       ├── comfort.py
+│   │   │       └── strategies.py
+│   │   ├── models/             # SQLAlchemy модели
+│   │   │   ├── property.py
+│   │   │   ├── price_history.py
+│   │   │   └── developer.py
+│   │   ├── schemas/            # Pydantic схемы (запрос/ответ)
+│   │   ├── services/           # бизнес-логика
+│   │   │   ├── calculator.py
+│   │   │   └── comfort.py
+│   │   └── tasks/              # Celery задачи
+│   │       └── feed_parser.py
+│   ├── alembic/                # миграции БД
+│   ├── tests/
+│   ├── main.py
+│   └── requirements.txt
+│
+├── frontend/
+│   └── src/
+│       ├── components/
+│       └── pages/
+│
+├── ml/                         # ноутбуки, обучение модели (этап 4)
+│
+├── docs/
+│   ├── architecture.md         # этот файл
+│   ├── known-risks.md          # активные и закрытые риски
+│   └── api.md                  # описание эндпоинтов
+│
+├── .env.example
+├── docker-compose.yml
+├── docker-compose.prod.yml
+└── README.md
+```
+
+---
+
+## API — структура эндпоинтов
+
+```
+GET  /api/v1/properties/               — список квартир с фильтрами
+GET  /api/v1/properties/{id}/          — карточка квартиры
+GET  /api/v1/properties/{id}/history/  — история изменения цены
+
+POST /api/v1/calculator/mortgage/      — расчёт ипотеки
+POST /api/v1/calculator/installment/   — расчёт рассрочки
+
+POST /api/v1/comfort/score/            — коэффициент комфорта по приоритетам
+
+POST /api/v1/strategies/               — ML: стратегии погашения (этап 4)
+
+# Внутренние (закрытые)
+POST /internal/refresh-feeds/          — ручной запуск парсера
+GET  /internal/health/                 — healthcheck
+```
+
+Версионирование `/v1/` обязательно с самого начала — при смене контракта
+добавляем `/v2/` без удаления старого.
+
+---
+
+## Модели данных
+
+### Developer (застройщик)
+```
+id, name, website, feed_url, feed_format, is_active, created_at
+```
+
+### Property (квартира)
+```
+id
+developer_id        → Developer
+# Стабильный идентификатор (не внешний id застройщика):
+building            — корпус
+floor               — этаж
+apartment_number    — номер квартиры
+area                — площадь (м²)
+# Характеристики:
+rooms, price, address
+location            — PostGIS Point (координаты)
+status              — в продаже / снята
+raw_data            — JSONB (оригинал из фида)
+created_at, updated_at
+```
+
+### PriceHistory (история цен)
+```
+id, property_id → Property
+price, recorded_at
+source          — откуда цена (фид / ручная правка)
+```
+
+> ⚠️ Идентификатор квартиры — связка (building + floor + apartment_number + area),
+> НЕ внешний id застройщика. Застройщики переименовывают лоты.
+
+---
+
+## Git-стратегия
+
+**Ветки:**
+```
+main       — стабильный продакшн, только через PR из develop
+develop    — интеграционная, сюда мержатся feature-ветки
+feature/   — конкретная задача: feature/xml-parser
+fix/       — исправление: fix/price-update-crash
+chore/     — инфраструктура: chore/docker-compose-setup
+```
+
+**Формат коммитов (Conventional Commits):**
+```
+feat:     новая функциональность
+fix:      исправление бага
+chore:    инфраструктура, зависимости
+docs:     документация
+refactor: рефакторинг без изменения поведения
+test:     тесты
+```
+
+---
+
+## Ключевые архитектурные решения
+
+| Решение | Обоснование |
+|---|---|
+| FastAPI вместо DRF | Async, Pydantic, востребованность на рынке |
+| Отдельная таблица PriceHistory | Нужны запросы по диапазону дат, JSONB не подходит |
+| Идентификатор по атрибутам квартиры | Внешние id нестабильны между обновлениями фида |
+| Celery задачи идемпотентны | Повторный запуск при сбое не создаёт дубли |
+| PostGIS для геоданных | Расстояния до метро, парков — индексированные геозапросы |
+| ML-сервис изолирован | Общается с основным API по внутреннему HTTP, не напрямую к БД |
+| Django Admin не используется | Только FastAPI, для внутреннего управления — отдельная панель позже |
+
+---
+
+## Roadmap
+
+| Этап | Содержание | Примерные сроки |
+|---|---|---|
+| 1 | Docker, БД, модели, парсинг тестового XML | Месяц 1–2 |
+| 2 | Калькулятор ипотеки/рассрочки, базовый UI | Месяц 3–4 |
+| 3 | Реальные XML-фиды застройщиков | Месяц 5–6 |
+| 4 | Коэффициент комфорта (PostGIS, приоритеты) | Месяц 7–9 |
+| 5 | ML-стратегии погашения | Год 2+ |
+
+---
+
+## Инфраструктура и деплой
+
+**Локально:** `docker-compose.yml` поднимает все сервисы одной командой.
+
+**Продакшн (старт):** Railway или Render — бесплатный/дешёвый хостинг
+для MVP, без настройки сервера.
+
+**CI (GitHub Actions):**
+- `ci.yml` — запускается на каждый PR: линтер (ruff), тесты (pytest)
+- `deploy.yml` — запускается при мерже в `main`
+
+**Секреты:** только через `.env` (локально) и GitHub Actions Secrets (CI/CD).
+Файл `.env` никогда не коммитится, в репо только `.env.example`.
