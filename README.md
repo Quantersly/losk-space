@@ -1,2 +1,21 @@
-# losk-space
-Real estate analytics platform for Moscow new buildings
+# Losk Space
+
+Аналитическая платформа по новостройкам Москвы.
+
+## Возможности (roadmap)
+- Агрегация данных от застройщиков через XML-фиды
+- Калькулятор ипотеки и рассрочки
+- Коэффициент комфорта квартиры по личным приоритетам
+- ML-стратегии погашения с анализом рисков
+
+## Стек
+FastAPI · PostgreSQL + PostGIS · Celery · Redis · Next.js · Docker
+
+## Запуск
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+## Документация
+См. `/docs` — архитектура, риски, контексты чатов.
