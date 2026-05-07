@@ -224,6 +224,8 @@ __marimo__/
 
 # Docker
 docker-compose.override.yml
+postgres_data/
+redis_data/
 
 # Python
 __pycache__/
@@ -243,3 +245,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Alembic cache (но не сами миграции)
+alembic/__pycache__/
+alembic/versions/__pycache__/

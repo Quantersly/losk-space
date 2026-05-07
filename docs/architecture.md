@@ -15,7 +15,7 @@ Losk Space — аналитическая платформа по новостр
 | Backend API | FastAPI + Pydantic | Async, автодокументация, востребован на рынке |
 | ORM | SQLAlchemy + Alembic | Гибкость, зрелость, поддержка PostGIS |
 | База данных | PostgreSQL + PostGIS | Геозапросы (метро, парки, расстояния) |
-| Очереди | Celery + Redis | Фоновый парсинг XML, обновление цен |
+| Очереди | Celery + Redis | Фоновый парсинг XML/JSON, обновление цен |
 | Frontend | Next.js (React, TypeScript) | SEO, удобная маршрутизация |
 | Инфраструктура | Docker Compose | Единая среда для dev и prod |
 | CI/CD | GitHub Actions | Автотесты, линтер, деплой |
@@ -26,25 +26,35 @@ Losk Space — аналитическая платформа по новостр
 ## Схема сервисов
 
 ```
-XML-фиды застройщиков
-        │
-        ▼
-  Celery Worker  ──── Redis (очередь задач)
-        │
-        ▼
-  FastAPI (Backend)
-        │
-        ├── PostgreSQL + PostGIS (основные данные)
-        │
-        ├── ML Service (этап 4, внутренний API)
-        │
-        └── Внешние API (ЦБ РФ, геокодер)
+      XML-фиды (или JSON API) застройщиков
                 │
                 ▼
-        Next.js Frontend
+        ┌───────┴───────┐
+        │ celery_parser │ ───┐
+        └───────────────┘    │
+                             │
+      Пользовательские задачи│
+      (триггеры из API)      │
+                │            ▼
+        ┌───────┴───────┐  Redis (Очереди задач)
+        │  celery_user  │  [parser_queue]
+        └───────┬───────┘  [user_queue]
+                │            ▲
+                ▼            │
+         FastAPI (Backend) ──┘
                 │
-                ▼
-          Пользователь
+                ├── PostgreSQL + PostGIS (основные данные)
+                │
+                ├── ML Service (этап 4, внутренний API)
+                │
+                └── Внешние API (ЦБ РФ, геокодер)
+                        │
+                        ▼
+                Next.js Frontend
+                        │
+                        ▼
+                  Пользователь
+
 ```
 
 ---
@@ -54,39 +64,47 @@ XML-фиды застройщиков
 ```
 losk-space/
 ├── .github/
-│   └── workflows/
-│       ├── ci.yml              # lint + tests на каждый PR
-│       └── deploy.yml          # деплой при мерже в main
-│
+│   └── workflows/               # В разработке
+│       ├── ci.yml         
+│       └── deploy.yml 
 ├── backend/
 │   ├── app/
-│   │   ├── api/
-│   │   │   └── v1/
-│   │   │       ├── properties.py
-│   │   │       ├── calculator.py
-│   │   │       ├── comfort.py
-│   │   │       └── strategies.py
-│   │   ├── models/             # SQLAlchemy модели
+│   │   ├── api/ 
+│   │   │   └──v1/
+│   │   │      ├── properties.py
+│   │   │      ├── calculator.py # В разработке
+│   │   │      ├── comfort.py    # В разработке
+│   │   │      └── strategies.py # В планах 
+│   │   ├── models/
 │   │   │   ├── property.py
 │   │   │   ├── price_history.py
 │   │   │   └── developer.py
-│   │   ├── schemas/            # Pydantic схемы (запрос/ответ)
-│   │   ├── services/           # бизнес-логика
-│   │   │   ├── calculator.py
-│   │   │   └── comfort.py
-│   │   └── tasks/              # Celery задачи
-│   │       └── feed_parser.py
+│   │   ├── schemas/             # Pydantic схемы (запрос/ответ)
+│   │   ├── services/
+│   │   │   ├── calculator.py    # В разработке
+│   │   │   └── comfort.py       # В разработке
+│   │   ├── tasks/               # Celery логика
+│   │   │   ├── celery_app.py    # Инициализация и routing
+│   │   │   ├── feed_parser_task.py (очередь parser_queue)
+│   │   │   └── user_task.py        (очередь user_queue)
+│   │   ├── database.py          # Асинхронное подключение (для API/парсеров)
+│   │   └── sync_database.py     # Синхронное подключение (для Celery/скриптов)
+│   ├── parsers/                 # Модульная система парсеров
+│   │   ├── base.py              # Базовый класс парсера
+│   │   ├── register.py          # Регистратор застройщиков
+│   │   └── developer_{name}/    # Индивидуальные пакеты
+│   │       └── parser.py
 │   ├── alembic/                # миграции БД
 │   ├── tests/
 │   ├── main.py
 │   └── requirements.txt
 │
-├── frontend/
+├── frontend/                   # В разработке
 │   └── src/
 │       ├── components/
 │       └── pages/
 │
-├── ml/                         # ноутбуки, обучение модели (этап 4)
+├── ml/                         # В планах, обучение модели (этап 4)
 │
 ├── docs/
 │   ├── architecture.md         # этот файл
@@ -106,18 +124,18 @@ losk-space/
 ```
 GET  /api/v1/properties/               — список квартир с фильтрами
 GET  /api/v1/properties/{id}/          — карточка квартиры
-GET  /api/v1/properties/{id}/history/  — история изменения цены
+GET  /api/v1/properties/{id}/history/  — история изменения цены (разрабатывается)
 
-POST /api/v1/calculator/mortgage/      — расчёт ипотеки
-POST /api/v1/calculator/installment/   — расчёт рассрочки
+POST /api/v1/calculator/mortgage/      — расчёт ипотеки (разрабатывается)
+POST /api/v1/calculator/installment/   — расчёт рассрочки (разрабатывается)
 
-POST /api/v1/comfort/score/            — коэффициент комфорта по приоритетам
+POST /api/v1/comfort/score/            — коэффициент комфорта по приоритетам (разрабатывается)
 
-POST /api/v1/strategies/               — ML: стратегии погашения (этап 4)
+POST /api/v1/strategies/               — ML: стратегии погашения (этап 4) (в планах)
 
 # Внутренние (закрытые)
-POST /internal/refresh-feeds/          — ручной запуск парсера
-GET  /internal/health/                 — healthcheck
+POST /internal/refresh-feeds/          — ручной запуск парсера (разрабатывается)
+GET  /internal/health/                 — healthcheck (разрабатывается)
 ```
 
 Версионирование `/v1/` обязательно с самого начала — при смене контракта
@@ -134,17 +152,25 @@ id, name, website, feed_url, feed_format, is_active, created_at
 
 ### Property (квартира)
 ```
-id
-developer_id        → Developer
-# Стабильный идентификатор (не внешний id застройщика):
-building            — корпус
-floor               — этаж
-apartment_number    — номер квартиры
-area                — площадь (м²)
-# Характеристики:
-rooms, price, address
-location            — PostGIS Point (координаты)
-status              — в продаже / снята
+# Идентификация
+id, building, floor, apartment_number, area
+
+# Карточка
+rooms, price, finishing, ceiling_height, address
+total_area, living_area, kitchen_area
+
+# Фильтрация
+floor, floors_total, price, rooms, area
+delivery_date, status
+
+# Коэффициент комфорта
+location (PostGIS), floor, floors_total
+ceiling_height, finishing
+
+# Связи
+developer_id, complex_id
+
+# Остальные данные
 raw_data            — JSONB (оригинал из фида)
 created_at, updated_at
 ```
@@ -167,7 +193,7 @@ source          — откуда цена (фид / ручная правка)
 ```
 main       — стабильный продакшн, только через PR из develop
 develop    — интеграционная, сюда мержатся feature-ветки
-feature/   — конкретная задача: feature/xml-parser
+feature/   — конкретная задача: feature/parser
 fix/       — исправление: fix/price-update-crash
 chore/     — инфраструктура: chore/docker-compose-setup
 ```
@@ -195,14 +221,14 @@ test:     тесты
 | PostGIS для геоданных | Расстояния до метро, парков — индексированные геозапросы |
 | ML-сервис изолирован | Общается с основным API по внутреннему HTTP, не напрямую к БД |
 | Django Admin не используется | Только FastAPI, для внутреннего управления — отдельная панель позже |
-
+| Асинхронный FastAPI + синхронный Celery – раздельные движки БД | Оптимизация и упорядоченность процессов |
 ---
 
 ## Roadmap
 
 | Этап | Содержание | Примерные сроки |
 |---|---|---|
-| 1 | Docker, БД, модели, парсинг тестового XML | Месяц 1–2 |
+| 1 | Docker, БД, модели, парсинг тестового XML/JSON | Месяц 1–2 |
 | 2 | Калькулятор ипотеки/рассрочки, базовый UI | Месяц 3–4 |
 | 3 | Реальные XML-фиды застройщиков | Месяц 5–6 |
 | 4 | Коэффициент комфорта (PostGIS, приоритеты) | Месяц 7–9 |
@@ -255,3 +281,36 @@ test:     тесты
 - Z — обновление внутри этапа
 
 Версия фиксируется тегом в git и дублируется в Telegram-канале.
+
+## Логика распределения процессов
+- Пользователь ждёт ответа прямо сейчас? → FastAPI async
+- Задача зависит от внешнего сервиса (сайт застройщика, внешний API)? → Celery, внешние сервисы падают и висят
+- Задача может упасть и её надо перезапустить автоматически? → Celery, там есть retry из коробки
+Если хотя бы один ответ "да" на второй или третий вопрос — Celery.
+
+## Цели после v1.0.0
+
+### Отказоустойчивость
+- Retry с экспоненциальной задержкой в Celery
+- Circuit Breaker для внешних сервисов
+- Репликация PostgreSQL
+
+### Масштабирование
+- Kubernetes + Horizontal Pod Autoscaling по длине очереди Redis
+
+### Observability
+- Prometheus + Grafana (метрики)
+- OpenTelemetry / Jaeger (трейсинг)
+
+### Data Engineering
+- Оптимизация запросов через EXPLAIN ANALYZE
+- GIST-индексы для PostGIS
+- Партиционирование при >1M объектов
+
+### Архитектура и безопасность
+- Clean Architecture / DDD
+- OAuth2 / OpenID Connect
+
+## Сразу при деплое MVP
+- Sentry (алерты на ошибки)
+- Базовый EXPLAIN ANALYZE на тяжёлых запросах   
